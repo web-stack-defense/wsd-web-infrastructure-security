@@ -1,0 +1,38 @@
+==============================================================
+  TLS protocol support — example.com:443
+==============================================================
+  [OK]    tls1 is correctly disabled
+  [OK]    tls1_1 is correctly disabled
+  [OK]    tls1_2 is supported
+  [OK]    tls1_3 is supported
+
+==============================================================
+  Certificate validation
+==============================================================
+  [OK]    Certificate chain validates
+  [OK]    Certificate expires in 67 days (Jul 25 12:00:00 2026 GMT)
+
+==============================================================
+  HSTS header
+==============================================================
+  [OK]    HSTS header present: strict-transport-security: max-age=31536000; includeSubDomains
+
+==============================================================
+  Security headers
+==============================================================
+  [OK]    x-content-type-options present
+  [OK]    x-frame-options present
+  [OK]    referrer-policy present
+  [OK]    permissions-policy present
+  [INFO]  content-security-policy not configured (requires tuning per-site)
+
+==============================================================
+  Server identification
+==============================================================
+  [OK]    Server header present without version: server: nginx
+  [OK]    X-Powered-By header not present
+
+==============================================================
+  Summary
+==============================================================
+  No issues found.

@@ -1,0 +1,46 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local environment files
+.env
+.env.local
+*.local
+
+# Backups
+*.bak
+*.backup
+*.orig
+*.tmp
+
+# Logs
+*.log
+
+# Real keys and certificates (these should never be committed)
+*.key
+*.pem
+*.crt
+*.cer
+*.pfx
+*.p12
+ssh_host_*
+authorized_keys
+known_hosts
+
+# Real configuration files
+sshd_config.real
+nginx-real.conf
+apache-real.conf
+
+# Private notes and drafts
+notes/private/
+drafts/
+*.draft.md

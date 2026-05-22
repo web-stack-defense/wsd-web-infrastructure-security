@@ -1,0 +1,250 @@
+# =============================================================================
+# DNS Hardening — Zone File Reference
+#
+# Repository: wsd-web-infrastructure-security
+# Maintained as part of Web Stack Defense — https://www.webstackdefense.com
+#
+# Reference zone file fragments for DNS-layer protections that affect web
+# traffic: CAA, SPF, DKIM, DMARC, and notes on DNSSEC enablement.
+#
+# This file is a reference. Most modern DNS hosts (Cloudflare, Route 53,
+# DigitalOcean DNS, Google Cloud DNS) provide a web UI for these records.
+# The raw zone file syntax below is the underlying format.
+#
+# References:
+#   CAA:    https://letsencrypt.org/docs/caa/
+#   SPF:    RFC 7208
+#   DKIM:   RFC 6376
+#   DMARC:  RFC 7489
+#   DNSSEC: https://www.icann.org/dnssec
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 1. CAA records — Certificate Authority Authorization
+# -----------------------------------------------------------------------------
+# CAA records specify which Certificate Authorities are allowed to issue
+# certificates for the domain. Restricting issuance to your actual CA
+# reduces the risk of a misissued certificate being accepted.
+#
+# CAA record format:
+#   <flag> <tag> "<value>"
+#
+# Flags:
+#   0    - Non-critical (typical)
+#   128  - Critical (CA must reject if tag is not understood)
+#
+# Tags:
+#   issue       - Authorizes issuance of any certificate type
+#   issuewild   - Authorizes issuance of wildcard certificates only
+#   iodef       - Reporting URL/mailto for unauthorized issuance attempts
+#
+# Examples below allow ONLY Let's Encrypt to issue certificates for the
+# domain and ANY subdomain. If you use a different CA (e.g., DigiCert,
+# Sectigo, ZeroSSL), add or replace the issuer identifier accordingly.
+#
+# Common CA identifiers:
+#   letsencrypt.org      - Let's Encrypt
+#   sectigo.com          - Sectigo (formerly Comodo)
+#   digicert.com         - DigiCert
+#   globalsign.com       - GlobalSign
+#   amazon.com           - Amazon (for AWS Certificate Manager)
+#   pki.goog             - Google Trust Services
+#
+# IMPORTANT: A CAA record that excludes your actual CA will block
+# certificate renewal. Verify your CA identifier BEFORE deploying.
+# -----------------------------------------------------------------------------
+
+# Only Let's Encrypt can issue any certificate (root domain + subdomains).
+@   IN  CAA  0 issue "letsencrypt.org"
+
+# Only Let's Encrypt can issue wildcard certificates.
+@   IN  CAA  0 issuewild "letsencrypt.org"
+
+# Report unauthorized issuance attempts to this email.
+@   IN  CAA  0 iodef "mailto:security@example.com"
+
+# To allow multiple CAs, repeat the issue/issuewild records:
+# @  IN  CAA  0 issue "letsencrypt.org"
+# @  IN  CAA  0 issue "sectigo.com"
+
+# To explicitly forbid any CA from issuing wildcards (only specific named
+# certificates allowed), use a single character ";":
+# @  IN  CAA  0 issuewild ";"
+
+
+# -----------------------------------------------------------------------------
+# 2. SPF — Sender Policy Framework
+# -----------------------------------------------------------------------------
+# SPF specifies which servers are authorized to send mail for the domain.
+# Mail-receiving servers check the SPF record to verify the sender's IP
+# is authorized.
+#
+# Without SPF (or with a permissive SPF), the domain can be spoofed in
+# phishing emails. Modern receivers (Gmail, Outlook) deprioritize or
+# reject mail from domains without SPF.
+#
+# SPF is published as a TXT record. The record is a string starting with
+# "v=spf1" followed by mechanisms and a final "all" disposition.
+#
+# Common mechanisms:
+#   ip4:<cidr>           - Authorize specific IPv4 range
+#   ip6:<cidr>           - Authorize specific IPv6 range
+#   a                   - Authorize the IP in the domain's A record
+#   mx                  - Authorize all IPs in the domain's MX records
+#   include:<domain>     - Include the SPF record of another domain
+#   ~all                - Soft fail (mark non-matching as suspicious)
+#   -all                - Hard fail (reject non-matching)
+#
+# Hard fail (-all) is stricter but can cause issues if the SPF record
+# is incomplete. Soft fail (~all) is the common starting point; tighten
+# to hard fail after confirming the record is complete.
+#
+# Examples below assume the website does NOT send any mail. If the
+# website sends mail (transactional emails, contact forms, etc.), add
+# the sending service's SPF include directive.
+# -----------------------------------------------------------------------------
+
+# Strict SPF for a domain that does NOT send mail.
+# All mail claiming to be from this domain is illegitimate.
+@   IN  TXT  "v=spf1 -all"
+
+# SPF for a domain that sends mail via Google Workspace.
+# @   IN  TXT  "v=spf1 include:_spf.google.com ~all"
+
+# SPF for a domain that uses Mailgun for transactional email.
+# @   IN  TXT  "v=spf1 include:mailgun.org ~all"
+
+# SPF for a domain that uses multiple providers (combine carefully —
+# each include adds DNS lookups, and SPF has a 10-lookup limit).
+# @   IN  TXT  "v=spf1 include:_spf.google.com include:mailgun.org ~all"
+
+
+# -----------------------------------------------------------------------------
+# 3. DKIM — DomainKeys Identified Mail
+# -----------------------------------------------------------------------------
+# DKIM signs outgoing mail with a cryptographic signature published in
+# DNS. Receivers verify the signature to confirm the mail was sent by
+# an authorized server and was not modified in transit.
+#
+# DKIM is configured at the mail-sending service (Google Workspace,
+# Mailgun, SendGrid, Amazon SES, etc.). The sending service provides the
+# DNS record to publish — you do not generate it manually.
+#
+# DKIM records are published as TXT records under a selector subdomain:
+#   <selector>._domainkey.example.com
+#
+# Example format (DO NOT use this exact value — get the real one from
+# your mail provider):
+#
+#   google._domainkey  IN  TXT  "v=DKIM1; k=rsa; p=MIGfMA0GCSq...placeholder..."
+#
+# The actual record will be much longer (the p= value is a base64
+# encoding of the public key, typically several hundred characters).
+#
+# If the site does NOT send mail at all, no DKIM record is needed.
+# -----------------------------------------------------------------------------
+
+# Placeholder example only. Replace `placeholder_selector` with the real
+# selector and `placeholder_public_key_value` with the value provided
+# by your mail provider.
+#
+# placeholder_selector._domainkey  IN  TXT  "v=DKIM1; k=rsa; p=placeholder_public_key_value"
+
+
+# -----------------------------------------------------------------------------
+# 4. DMARC — Domain-based Message Authentication, Reporting and Conformance
+# -----------------------------------------------------------------------------
+# DMARC tells receiving mail servers what to do when an inbound message
+# fails SPF or DKIM checks for the domain. It also configures reporting
+# so the domain owner can see which servers are sending mail under the
+# domain's name.
+#
+# DMARC requires SPF or DKIM (or both) to function. The DMARC policy is
+# applied to messages that fail alignment with one or both.
+#
+# Policies (p= and sp=):
+#   none        - Monitor only, no enforcement (start here)
+#   quarantine  - Mark failing messages as suspicious
+#   reject      - Reject failing messages outright
+#
+# Recommended deployment progression:
+#   1. Deploy with p=none and a reporting address
+#   2. Monitor reports for 30-60 days
+#   3. Identify legitimate senders that fail DMARC
+#   4. Fix SPF/DKIM for those senders
+#   5. Move to p=quarantine and monitor for 30 days
+#   6. Move to p=reject
+#
+# Skipping straight to p=reject before reviewing reports will block
+# legitimate mail.
+#
+# The rua= and ruf= parameters specify reporting addresses. Aggregate
+# reports (rua) are sent daily and contain authentication statistics.
+# Forensic reports (ruf) contain individual failure details.
+# -----------------------------------------------------------------------------
+
+# Monitoring-only DMARC. Safe starting point for any new deployment.
+_dmarc   IN  TXT  "v=DMARC1; p=none; rua=mailto:dmarc-reports@example.com; ruf=mailto:dmarc-forensic@example.com; fo=1"
+
+# DMARC with quarantine policy and reporting (intermediate step).
+# _dmarc   IN  TXT  "v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@example.com; pct=50"
+
+# DMARC with reject policy (final hardening step, after months of monitoring).
+# _dmarc   IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc-reports@example.com; sp=reject; adkim=s; aspf=s"
+
+
+# -----------------------------------------------------------------------------
+# 5. DNSSEC enablement
+# -----------------------------------------------------------------------------
+# DNSSEC signs DNS records with cryptographic keys, allowing resolvers
+# to verify that responses have not been tampered with in transit.
+#
+# DNSSEC is enabled at the DNS host level, not in the zone file. The
+# zone file does not contain DNSSEC signatures directly — those are
+# generated by the DNS server (BIND, Cloudflare, Route 53, etc.).
+#
+# DNSSEC enablement steps vary by DNS host:
+#
+#   Cloudflare:
+#     1. DNS > Settings > Enable DNSSEC
+#     2. Copy the DS record values shown
+#     3. Add the DS record at your domain registrar
+#
+#   AWS Route 53:
+#     1. Hosted zone > DNSSEC signing > Enable signing
+#     2. Create KSK (key signing key)
+#     3. Add DS record at registrar
+#
+#   Self-hosted BIND:
+#     1. Generate ZSK and KSK with dnssec-keygen
+#     2. Sign the zone with dnssec-signzone or auto-signing
+#     3. Submit DS record to registrar
+#
+# CRITICAL: DNSSEC misconfiguration can make the entire domain
+# unresolvable. Validate DNSSEC after enablement using:
+#
+#   https://dnssec-analyzer.verisignlabs.com/
+#   https://dnsviz.net/
+#
+# If validation fails, disable DNSSEC at the registrar (remove DS
+# record) before resolvers fully cache the broken state.
+# -----------------------------------------------------------------------------
+
+
+# -----------------------------------------------------------------------------
+# 6. Other recommended records for web domains
+# -----------------------------------------------------------------------------
+# MTA-STS (Mail Transfer Agent Strict Transport Security):
+# Forces inbound mail to use TLS. Out of scope for this file but worth
+# implementing alongside the records above if the domain receives mail.
+# Reference: https://datatracker.ietf.org/doc/html/rfc8461
+#
+# TLSA / DANE:
+# Pins TLS certificates via DNSSEC. Requires DNSSEC to be working first.
+# Adoption is limited. Reference: https://datatracker.ietf.org/doc/html/rfc6698
+#
+# CDS / CDNSKEY:
+# Used to automate DS record updates at the registrar. Useful only if
+# your registrar supports it.
+# -----------------------------------------------------------------------------

@@ -1,0 +1,49 @@
+==============================================================
+  SSH server version
+==============================================================
+  [INFO]  OpenSSH_9.6p1 Ubuntu-3ubuntu13.5, OpenSSL 3.0.13 30 Jan 2024
+
+==============================================================
+  Authentication
+==============================================================
+  [OK]    PasswordAuthentication is disabled
+  [OK]    PermitEmptyPasswords is disabled
+  [OK]    PubkeyAuthentication is enabled
+  [OK]    PermitRootLogin is restricted (prohibit-password)
+
+==============================================================
+  Login restrictions
+==============================================================
+  [OK]    MaxAuthTries is 3 (good)
+  [INFO]  LoginGraceTime: 30
+  [INFO]  ClientAliveInterval: 300
+
+==============================================================
+  Forwarding restrictions
+==============================================================
+  [OK]    x11forwarding is disabled
+  [OK]    allowtcpforwarding is disabled
+  [OK]    allowagentforwarding is disabled
+  [OK]    gatewayports is disabled
+
+==============================================================
+  Logging
+==============================================================
+  [OK]    LogLevel is VERBOSE (good for audit trails)
+
+==============================================================
+  Cryptographic algorithms
+==============================================================
+  [OK]    No known-weak ciphers in Ciphers list
+  [OK]    No known-weak MACs in MACs list
+  [OK]    No known-weak key exchange algorithms in KexAlgorithms list
+
+==============================================================
+  Network configuration
+==============================================================
+  [INFO]  Listening port(s): 22
+
+==============================================================
+  Summary
+==============================================================
+  No issues found.

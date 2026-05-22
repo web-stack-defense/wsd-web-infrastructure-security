@@ -1,0 +1,357 @@
+# =============================================================================
+# OpenSSH Server (sshd) Hardened Configuration
+#
+# Repository: wsd-web-infrastructure-security
+# Maintained as part of Web Stack Defense — https://www.webstackdefense.com
+#
+# This is a reference configuration intended for OpenSSH 9.0+ on Ubuntu 22.04
+# LTS and newer. Every directive is commented with the reason it exists.
+#
+# CRITICAL: This file is NOT a drop-in replacement. Test in a staging
+# environment first. When applying to a production server, do so from a
+# separate independent session and keep that session open until the new
+# configuration is verified working through a second new session.
+#
+# Sections:
+#   1.  Protocol and listen configuration
+#   2.  Host keys
+#   3.  Algorithm allowlists (KexAlgorithms, Ciphers, MACs)
+#   4.  Authentication
+#   5.  Login and session restrictions
+#   6.  Logging
+#   7.  Forwarding restrictions
+#   8.  Subsystems
+#   9.  Match blocks (commented examples)
+#
+# Validation steps after applying:
+#   1. sudo sshd -t                          (test config syntax)
+#   2. sudo systemctl reload ssh             (reload, do not restart)
+#   3. Open a NEW session from a separate terminal
+#   4. Verify login works
+#   5. Only then close the original session
+#
+# Reference: man 5 sshd_config
+# Reference: https://www.openssh.com/manual.html
+# Reference: https://www.sshaudit.com/hardening_guides.html (used as a
+#            starting point but cross-checked against the OpenSSH man pages
+#            to avoid algorithm names that sshd does not actually recognize)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 1. Protocol and listen configuration
+# -----------------------------------------------------------------------------
+# Port 22 is the well-known SSH port. Changing it to a non-standard port
+# reduces noise from automated scanners but does not provide meaningful
+# security against a determined attacker — they will scan all ports.
+#
+# Changing the port is a tradeoff:
+#   + Reduces log volume from drive-by scans
+#   + Avoids the most obvious automated brute force targets
+#   - Requires updating every client, deployment script, and firewall rule
+#   - Creates confusion for new team members
+#   - Provides no actual protection against directed attacks
+#
+# Leave the port at 22 unless you have a specific operational reason to
+# move it AND have the discipline to keep documentation current.
+#
+# AddressFamily controls IPv4 vs IPv6 binding. "any" listens on both,
+# which is the default and almost always correct.
+# -----------------------------------------------------------------------------
+
+Port 22
+AddressFamily any
+
+# ListenAddress restricts which interfaces sshd binds to. Commented out by
+# default. Uncomment and set to specific IPs if the server has multiple
+# network interfaces and SSH should only accept connections on one of them.
+# ListenAddress 0.0.0.0
+# ListenAddress ::
+
+
+# -----------------------------------------------------------------------------
+# 2. Host keys
+# -----------------------------------------------------------------------------
+# Host keys identify the server to connecting clients. The first time a
+# client connects, the server's host key fingerprint is recorded in the
+# client's known_hosts file. On subsequent connections, the client verifies
+# the server's identity against this stored fingerprint.
+#
+# Modern OpenSSH supports Ed25519 (recommended) and RSA (compatibility).
+# ECDSA is supported but Ed25519 is preferred for new deployments.
+#
+# Generate fresh host keys after a fresh install or whenever the existing
+# keys are suspected of compromise:
+#
+#   sudo rm /etc/ssh/ssh_host_*
+#   sudo ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N ""
+#   sudo ssh-keygen -t rsa -b 4096 -f /etc/ssh/ssh_host_rsa_key -N ""
+#
+# IMPORTANT: Regenerating host keys invalidates the stored fingerprints
+# on every client that has connected. Clients will see a "host key has
+# changed" warning on next connection and must accept the new key.
+# -----------------------------------------------------------------------------
+
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+
+# -----------------------------------------------------------------------------
+# 3. Algorithm allowlists
+# -----------------------------------------------------------------------------
+# These directives restrict which cryptographic algorithms sshd will offer
+# during the key exchange.
+#
+# TRADEOFF NOTE: Specifying an allowlist (the approach used below)
+# protects against weak algorithms but also opts out of any future
+# algorithms OpenSSH introduces. Review and update these lists when
+# upgrading OpenSSH major versions.
+#
+# An alternative approach uses the `-` prefix to subtract weak algorithms
+# from the OpenSSH default set:
+#
+#   KexAlgorithms -diffie-hellman-group1-sha1,diffie-hellman-group14-sha1
+#
+# This pattern automatically inherits new safe defaults but is harder to
+# audit. The allowlist approach is used here because it is more explicit
+# and easier to review.
+#
+# Verify which algorithms your installed OpenSSH actually supports:
+#
+#   ssh -Q kex
+#   ssh -Q cipher
+#   ssh -Q mac
+#
+# If a listed algorithm is not supported by your OpenSSH version, sshd
+# will refuse to start. Remove unsupported algorithms before applying.
+# -----------------------------------------------------------------------------
+
+# Key exchange algorithms.
+# - sntrup761x25519-sha512@openssh.com: post-quantum hybrid, OpenSSH 9.0+
+# - curve25519-sha256: modern, well-vetted
+# - curve25519-sha256@libssh.org: same algorithm, older name for compatibility
+# - diffie-hellman-group16-sha512: 4096-bit MODP, safe fallback
+# - diffie-hellman-group18-sha512: 8192-bit MODP, safe fallback
+# - diffie-hellman-group-exchange-sha256: dynamic group size, safe with
+#   moduli file restricted to 3072-bit and larger (see notes below)
+KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256
+
+# Symmetric ciphers (data encryption).
+# - chacha20-poly1305@openssh.com: AEAD, fast on systems without AES-NI
+# - aes256-gcm@openssh.com: AEAD, fast on systems with AES-NI
+# - aes128-gcm@openssh.com: AEAD, fast on systems with AES-NI
+# - aes256-ctr: CTR mode AES-256, used when AEAD not available
+# - aes192-ctr: included for compatibility
+# - aes128-ctr: included for compatibility
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+
+# Message authentication codes.
+# Only Encrypt-then-MAC (etm) variants are listed. EtM is preferred over
+# MAC-then-Encrypt because it prevents an attacker from learning anything
+# about plaintext before MAC verification.
+#
+# Note: when using AEAD ciphers (chacha20-poly1305, aes*-gcm), the MAC
+# algorithm is part of the cipher itself and the MACs list below is not
+# consulted. The MAC list applies to CTR-mode ciphers.
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com
+
+# Host key signature algorithms accepted from clients during host
+# authentication, and offered by the server.
+# - ssh-ed25519: modern, preferred
+# - rsa-sha2-512 / rsa-sha2-256: SHA-2 RSA, replaces deprecated ssh-rsa (SHA-1)
+HostKeyAlgorithms ssh-ed25519,rsa-sha2-512,rsa-sha2-256
+PubkeyAcceptedAlgorithms ssh-ed25519,rsa-sha2-512,rsa-sha2-256
+
+# Operational note on DH moduli:
+# OpenSSH uses /etc/ssh/moduli when negotiating diffie-hellman-group-exchange.
+# Older Ubuntu/Debian releases include 2048-bit moduli that are weaker than
+# desired. To remove moduli smaller than 3072 bits:
+#
+#   sudo awk '$5 >= 3071' /etc/ssh/moduli > /etc/ssh/moduli.safe
+#   sudo mv /etc/ssh/moduli.safe /etc/ssh/moduli
+#
+# This is the operator's responsibility — the sshd_config cannot enforce
+# it directly.
+
+
+# -----------------------------------------------------------------------------
+# 4. Authentication
+# -----------------------------------------------------------------------------
+# Public key authentication only. Passwords are disabled.
+#
+# Before enabling PasswordAuthentication=no, confirm:
+#   1. Your SSH key is in ~/.ssh/authorized_keys for the user you log in as
+#   2. You have successfully logged in with that key at least once
+#   3. You have a separate independent session open as a recovery path
+#
+# Permanently disabling password auth is the single most effective SSH
+# hardening step. Brute force attacks against SSH overwhelmingly target
+# passwords. With password auth off, brute force becomes irrelevant.
+# -----------------------------------------------------------------------------
+
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+
+# PermitRootLogin options:
+#   yes                     - Allow root login with any auth method (avoid)
+#   no                      - Block all root login
+#   prohibit-password       - Allow root login only with public key
+#   forced-commands-only    - Allow root only for specific forced commands
+#
+# "prohibit-password" is the right choice for most environments. It blocks
+# the brute force vector while preserving root access via key for emergency
+# recovery. If you have a non-root admin user with sudo, "no" is stricter.
+PermitRootLogin prohibit-password
+
+# AuthenticationMethods enforces the auth flow. "publickey" alone means
+# only public key auth is accepted. To require 2FA in addition to key:
+#   AuthenticationMethods publickey,keyboard-interactive
+# (combined with a PAM module like google-authenticator)
+AuthenticationMethods publickey
+
+# UsePAM yes is required for some auth flows but introduces complexity.
+# Leave at yes unless you have a specific reason to disable.
+UsePAM yes
+
+# Disable GSSAPI authentication. Not used outside of Kerberos environments
+# and adds attack surface in standard deployments.
+GSSAPIAuthentication no
+
+# Disable host-based authentication. Almost never used legitimately, common
+# attack vector when misconfigured.
+HostbasedAuthentication no
+IgnoreRhosts yes
+
+
+# -----------------------------------------------------------------------------
+# 5. Login and session restrictions
+# -----------------------------------------------------------------------------
+# LoginGraceTime: how long sshd waits for a user to authenticate before
+# disconnecting. Default is 120 seconds. 30 seconds is plenty for a
+# legitimate user and reduces resource consumption from stalled brute
+# force attempts.
+LoginGraceTime 30s
+
+# MaxAuthTries: how many auth attempts per connection before disconnect.
+# Default is 6. Lower values reduce brute force effectiveness.
+MaxAuthTries 3
+
+# MaxSessions: number of concurrent sessions per network connection
+# (multiplexed). Default is 10. 2 is reasonable for most users.
+MaxSessions 2
+
+# MaxStartups: limits concurrent unauthenticated connections.
+# Format: start:rate:full
+#   - Allow up to {start} unauthenticated connections
+#   - Beyond that, drop {rate}% probabilistically
+#   - At {full}, drop all new unauthenticated connections
+# 10:30:60 means: 10 free, then probabilistic drop, then full block at 60.
+MaxStartups 10:30:60
+
+# ClientAliveInterval and ClientAliveCountMax control idle session
+# detection. ClientAliveInterval seconds between probes, terminate after
+# ClientAliveCountMax failed probes.
+#
+# 300 second interval with 2 missed probes = ~10 minute idle disconnect.
+# Aggressive values disconnect legitimate sessions; conservative values
+# leave dead connections holding resources. 300/2 is a balanced default.
+ClientAliveInterval 300
+ClientAliveCountMax 2
+
+# Disable TCP forwarding by default. Re-enable per-user via Match blocks
+# if needed.
+AllowTcpForwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+GatewayPorts no
+
+# X11 forwarding is a common attack vector and rarely needed on web servers.
+X11Forwarding no
+
+# Disable the trivia banner. Some compliance frameworks require a banner;
+# uncomment Banner directive and place the message in /etc/issue.net.
+PrintMotd no
+PrintLastLog yes
+# Banner /etc/issue.net
+
+
+# -----------------------------------------------------------------------------
+# 6. Logging
+# -----------------------------------------------------------------------------
+# VERBOSE logging includes public key fingerprints used for successful
+# logins. This creates a clear audit trail of which key was used to access
+# the server — important for incident response and key revocation.
+LogLevel VERBOSE
+SyslogFacility AUTH
+
+# Compression after authentication. Set to delayed (default) — only enable
+# compression after successful auth, preventing CRIME-like attacks against
+# the pre-auth state.
+Compression delayed
+
+
+# -----------------------------------------------------------------------------
+# 7. Forwarding restrictions
+# -----------------------------------------------------------------------------
+# See section 5 for the default-deny settings. Forwarding is disabled by
+# default in this configuration. Re-enable in Match blocks below for
+# specific users who need it.
+
+
+# -----------------------------------------------------------------------------
+# 8. Subsystems
+# -----------------------------------------------------------------------------
+# SFTP subsystem with enhanced logging. The "-f AUTHPRIV -l INFO" flags
+# log SFTP file operations to the auth facility, which is essential for
+# audit trails on servers that accept file uploads via SFTP.
+Subsystem sftp /usr/lib/openssh/sftp-server -f AUTHPRIV -l INFO
+
+
+# -----------------------------------------------------------------------------
+# 9. Match blocks (commented examples)
+# -----------------------------------------------------------------------------
+# Match blocks override the global configuration for specific users,
+# groups, addresses, or hosts. Common patterns:
+#
+# Allow TCP forwarding only for a specific deploy user:
+# Match User deploy
+#     AllowTcpForwarding yes
+#     PermitOpen 127.0.0.1:5432
+#
+# Restrict a service account to a single forced command (e.g., backups):
+# Match User backup
+#     ForceCommand /usr/local/bin/backup-only.sh
+#     AllowTcpForwarding no
+#     X11Forwarding no
+#
+# Restrict admin login to specific source IPs:
+# Match Address 203.0.113.0/24
+#     PermitRootLogin prohibit-password
+# Match Address *,!203.0.113.0/24
+#     PermitRootLogin no
+#
+# Uncomment and adapt as needed. Match blocks must appear at the end of
+# the file — directives before the next Match (or end of file) apply
+# only when the match condition is true.
+
+
+# -----------------------------------------------------------------------------
+# Additional access control
+# -----------------------------------------------------------------------------
+# Restrict which users can log in via SSH. Even with public key auth
+# enforced, an AllowUsers list provides a defense-in-depth control.
+#
+# Uncomment and add the actual usernames before applying. With this line
+# uncommented, only the listed users can log in.
+#
+# AllowUsers admin deploy
+
+# Same for groups (an alternative to AllowUsers).
+# AllowGroups sshusers
+
+# Explicit deny lists are also supported.
+# DenyUsers nobody www-data
+# DenyGroups nogroup
